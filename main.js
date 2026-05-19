@@ -1,9 +1,9 @@
 // ==UserScript==
-// @name         雨课堂课件下载器（手动确认版）
-// @namespace    https://github.com/rainclassroom-downloader
+// @name         雨课堂课件插件
+// @namespace    https://github.com/c0d805e15c550432/Rainclassroom_Plugin
 // @version      1.0.0
-// @description  拦截雨课堂(pro.yuketang.cn)课件接口，手动选择后下载 PPT 并合成 PDF
-// @author       RainClassroom Downloader
+// @description  下载雨课堂课堂回顾的课件及视频
+// @author       zhzh
 // @match        https://pro.yuketang.cn/*
 // @icon         https://pro.yuketang.cn/favicon.ico
 // @grant        GM_xmlhttpRequest
@@ -1326,7 +1326,7 @@
                 updateDownloadBtn();
                 uiLog(`🔄 已恢复 ${STATE.pendingItems.length} 个待确认课件，共完成 ${STATE.totalCompleted} 个`);
             } else {
-                uiLog('🚀 雨课堂课件下载器（手动确认版）已就绪');
+                uiLog('🚀 雨课堂课件下载器已就绪');
             }
         };
 
