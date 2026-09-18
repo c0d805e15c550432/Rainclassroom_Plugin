@@ -1,0 +1,153 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rain Classroom downloader regression fixture</title>
+<style>
+    /* Reproduce Rain Classroom's global input reset (desktop and mobile CSS). */
+    input, textarea { appearance: none; -webkit-appearance: none; border: none; outline: none; }
+    body { font: 16px system-ui; padding: 20px; background: #f0f4fa; }
+    button { padding: 8px; margin: 4px; }
+    iframe { width: 85%; height: 260px; border: 2px solid #7589a8; }
+    #qr-frame { position: fixed; right: 32px; bottom: 32px; width: 300px; height: 300px; background: white; }
+    #qr-placeholder { width: 220px; height: 220px; background: repeating-conic-gradient(#111 0% 25%, white 0% 50%) 0 / 20px 20px; }
+</style>
+<script>
+    // Mimic the userscript manager and the site's fetch response without external I/O.
+    window.GM_addStyle = css => { const style = document.createElement('style'); style.textContent = css; document.head.append(style); };
+    window.GM_getValue = (key, fallback) => JSON.parse(localStorage.getItem('fixture-gm-' + key) || 'null') ?? fallback;
+    window.GM_setValue = (key, value) => localStorage.setItem('fixture-gm-' + key, JSON.stringify(value));
+    class FakeSocket extends EventTarget {
+        constructor(url) { super(); this.url = url; }
+        emit(data) { this.dispatchEvent(new MessageEvent('message', { data: JSON.stringify(data) })); }
+    }
+    window.WebSocket = FakeSocket;
+    let quizCounter = 0;
+    let simulatedQuestion = null;
+    window.request = { post: async (url, payload) => {
+        document.getElementById('quiz-output').textContent = '模拟提交成功：' + JSON.stringify(payload);
+        return { code: 0 };
+    } };
+    window.GM_registerMenuCommand = (name, callback) => document.addEventListener('DOMContentLoaded', () => {
+        const button = document.createElement('button'); button.textContent = name; button.onclick = callback;
+        document.getElementById('menus').append(button);
+    });
+    window.GM_xmlhttpRequest = options => {
+        const timer = setTimeout(() => {
+            if (options.method === 'POST' && options.url.includes('/chat/completions')) {
+                options.onload({ status: 200, responseText: JSON.stringify({ choices: [{ message: {
+                    content: '{"answer":["B"],"explanation":"这是一条本地模拟建议。"}',
+                } }] }) });
+                return;
+            }
+            if (!document.getElementById('network-success')?.checked) {
+                options.onload({ status: 404, response: new Blob([]) });
+                return;
+            }
+            const video = options.url.includes('.mp4');
+            const png = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a1ioAAAAASUVORK5CYII='), c => c.charCodeAt(0));
+            const blob = new Blob([video ? 'simulated video bytes' : png], { type: video ? 'video/mp4' : 'image/png' });
+            options.onload({ status: 200, response: blob, responseHeaders: 'Content-Length: ' + blob.size });
+        }, 300);
+        return { abort() { clearTimeout(timer); options.onabort?.(); } };
+    };
+    // Only simulate manager callbacks; this fixture never claims to write a real file.
+    window.GM_info = { downloadMode: 'browser' };
+    const simulatedSaves = [];
+    let saveRequests = 0;
+    const showSaveRequests = () => {
+        document.getElementById('export-status').textContent = `保存请求次数：${saveRequests}；等待回调：${simulatedSaves.length}；${simulatedSaves.map(s => s.name).join('、')}`;
+    };
+    window.GM_download = options => {
+        saveRequests++;
+        simulatedSaves.push(options);
+        showSaveRequests();
+        return { abort() {
+            const index = simulatedSaves.indexOf(options);
+            if (index >= 0) simulatedSaves.splice(index, 1);
+            options.onerror({ error: 'not_succeeded' });
+            showSaveRequests();
+        } };
+    };
+    window.jspdf = { jsPDF: class {
+        addPage() {} addImage() {}
+        output() { return new Blob(['simulated PDF bytes'], { type: 'application/pdf' }); }
+    } };
+    let captureIndex = 0;
+    window.fetch = async () => new Response(JSON.stringify({ data: {
+        activityId: `${location.pathname}-${location.search}-${++captureIndex}`,
+        title: `Fixture ${location.pathname} ${captureIndex} <safe text>`,
+        slides: [{ index: 1, cover: 'https://example.test/image.jpg', problem: simulatedQuestion }],
+    } }), { headers: { 'Content-Type': 'application/json' } });
+</script>
+<script src="/userscript-loader.js"></script>
+<h1>Downloader UI regression fixture</h1>
+<p>所有资源与保存回调均为模拟，不会访问真实课程或写入磁盘。默认网络请求失败，勾选下方选项可模拟成功下载。</p>
+<p>The userscript runs with a separate sandbox window and the real page exposed as unsafeWindow.</p>
+<div id="menus"></div>
+<button id="capture">Capture courseware</button>
+<button id="capture-direct-ppt">Capture direct PPT</button>
+<button id="capture-direct-ppt-2">Capture second direct PPT</button>
+<button id="capture-video">Capture video source</button>
+<button id="login">Toggle QR login overlay</button>
+<button id="spa-login">SPA login route</button>
+<button id="spa-course">SPA course route</button>
+<button id="duplicate">Inject script again</button>
+<button id="inspect">Inspect frame panel counts</button>
+<output id="inspection"></output>
+<p><label><input id="network-success" type="checkbox">模拟网络下载成功</label></p>
+<button id="save-success">确认下一次保存成功（模拟）</button>
+<button id="save-failure">拒绝下一次保存（模拟）</button>
+<output id="export-status">尚无保存请求</output>
+<p><button id="quiz-publish">发布模拟选择题</button><button id="quiz-finish">结束模拟题</button></p>
+<output id="quiz-output">尚未提交模拟答案</output>
+<div id="frames"></div>
+<script>
+    const quizSocket = new WebSocket('wss://pro.yuketang.cn/wsapp/');
+    document.getElementById('quiz-publish').onclick = async () => {
+        simulatedQuestion = { problemId: 'fixture-' + Date.now() + '-' + (++quizCounter), problemType: 1,
+            body: '测试：1 + 1 = ?', options: [{ key: 'A', value: '1' }, { key: 'B', value: '2' }], result: null };
+        await fetch('https://pro.yuketang.cn/api/v3/lesson/presentation/fetch');
+        setTimeout(() => quizSocket.emit({ op: 'unlockproblem', lessonid: 'fixture-lesson',
+            problem: { prob: simulatedQuestion.problemId, dt: Date.now(), limit: 60 } }), 100);
+    };
+    document.getElementById('quiz-finish').onclick = () => quizSocket.emit({ op: 'problemfinished', lessonid: 'fixture-lesson', prob: simulatedQuestion?.problemId });
+    document.getElementById('capture').onclick = () => fetch('https://pro.yuketang.cn/api/v3/lesson/presentation/fetch');
+    document.getElementById('capture-direct-ppt').onclick = () => fetch('https://pro.yuketang.cn/api/v3/classroom-report/student/ppt?lesson_id=7&presentationId=fixture-1');
+    document.getElementById('capture-direct-ppt-2').onclick = () => fetch('https://pro.yuketang.cn/api/v3/classroom-report/student/ppt?lesson_id=7&presentationId=fixture-2');
+    document.getElementById('save-success').onclick = () => { simulatedSaves.shift()?.onload(); showSaveRequests(); };
+    document.getElementById('save-failure').onclick = () => { simulatedSaves.shift()?.onerror({ error: 'not_permitted' }); showSaveRequests(); };
+    document.getElementById('capture-video').onclick = () => {
+        // An orphan <source> has no media parent and makes no network request.
+        const source = document.createElement('source');
+        source.src = 'https://ks-playback.xuetangx.com/liveRecordLive/fixture-video.mp4';
+        document.body.append(source);
+    };
+    document.getElementById('login').onclick = () => {
+        const existing = document.getElementById('qr-frame');
+        if (existing) existing.remove();
+        else {
+            const frame = document.createElement('iframe'); frame.id = 'qr-frame'; frame.src = '/qrconnect'; document.body.append(frame);
+        }
+    };
+    document.getElementById('spa-login').onclick = () => history.pushState({}, '', '/login');
+    document.getElementById('spa-course').onclick = () => history.pushState({}, '', '/v2/web/student-lesson-report/1/2/3');
+    document.getElementById('duplicate').onclick = () => {
+        const script = document.createElement('script'); script.src = '/userscript-loader.js'; document.head.append(script);
+    };
+    document.getElementById('inspect').onclick = () => {
+        const counts = [];
+        function visit(doc) {
+            counts.push(doc.querySelectorAll('#rc-panel-container').length);
+            doc.querySelectorAll('iframe').forEach(frame => { if (frame.contentDocument) visit(frame.contentDocument); });
+        }
+        visit(document);
+        document.getElementById('inspection').textContent = 'Panels by document: ' + counts.join(', ');
+    };
+    const depth = Number(new URLSearchParams(location.search).get('depth') || 0);
+    if (location.pathname === '/qrconnect') {
+        document.body.innerHTML = '<p>QR login placeholder (test pattern)</p><div id="qr-placeholder"></div>';
+    } else if (depth < 2) {
+        const frame = document.createElement('iframe'); frame.id = 'course-frame'; frame.src = '/frame?depth=' + (depth + 1);
+        document.getElementById('frames').append(frame);
+    }
+</script>
